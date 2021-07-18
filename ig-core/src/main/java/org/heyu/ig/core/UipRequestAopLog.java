@@ -4,14 +4,13 @@ import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
-import org.aspectj.lang.annotation.Before;
 import org.aspectj.lang.annotation.Pointcut;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpMethod;
-import org.springframework.stereotype.Component;
 import org.heyu.ig.core.service.UipRecordService;
 import org.heyu.ig.core.util.DateTimeUtil;
 import org.heyu.ig.core.util.JsonUtil;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpMethod;
+import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
@@ -23,10 +22,6 @@ import java.util.*;
 @Aspect
 @Component
 public class UipRequestAopLog {
-
-	private static final ThreadLocal<Long> START_TIME = new ThreadLocal<>();
-
-	private static final ThreadLocal<UipRequestRecord> RECORD = new ThreadLocal<>();
 
 	@Autowired
 	private UipRecordService uipRecordService;
@@ -40,19 +35,46 @@ public class UipRequestAopLog {
 	}
 
 	/**
-	 * 前置操作
+	 * 环绕操作
 	 *
 	 * @param point
 	 *            切入点
+	 * @return 原方法返回值
+	 * @throws Throwable
+	 *             异常信息
 	 */
-	@Before("log()")
-	public void beforeLog(JoinPoint point) {
+	@Around("log()")
+	public Object aroundLog(ProceedingJoinPoint point) throws Throwable {
+		UipRequestRecord uipRequestRecord = new UipRequestRecord();
+		long start = System.currentTimeMillis();
+		aroundBefore(uipRequestRecord, point);
+		Object result = null;
 		try {
-			UipRequestRecord uipRequestRecord = new UipRequestRecord();
+			result = point.proceed();
+			uipRequestRecord.setSuccess(true);
+		} finally {
+			try {
+				long end = System.currentTimeMillis();
+				if (result != null) {
+					if (result instanceof String) {
+						uipRequestRecord.setResponse((String) result);
+					} else {
+						uipRequestRecord.setResponse(JsonUtil.obj2json(result));
+					}
+				}
+				uipRequestRecord.setMilli(end - start);
+				uipRequestRecord.setResponseTime(DateTimeUtil.date2dateTimeStr(new Date(end)));
+				uipRecordService.add(uipRequestRecord);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+		return result;
+	}
+
+	private void aroundBefore(UipRequestRecord uipRequestRecord, JoinPoint point) {
+		try {
 			uipRequestRecord.setRequestTime(DateTimeUtil.date2dateTimeStr(new Date()));
-			RECORD.set(uipRequestRecord);
-			Long start = System.currentTimeMillis();
-			START_TIME.set(start);
 			uipRequestRecord.setType(UipRequestTypeEnum.REQUEST.getCode());
 			Class<?> clazz = Class.forName(point.getSignature().getDeclaringTypeName());
 			Method[] methods = clazz.getDeclaredMethods();
@@ -118,51 +140,6 @@ public class UipRequestAopLog {
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
-	}
-
-	/**
-	 * 环绕操作
-	 *
-	 * @param point
-	 *            切入点
-	 * @return 原方法返回值
-	 * @throws Throwable
-	 *             异常信息
-	 */
-	@Around("log()")
-	public Object aroundLog(ProceedingJoinPoint point) throws Throwable {
-		Object result = null;
-		UipRequestRecord uipRequestRecord = null;
-		try {
-			result = point.proceed();
-			uipRequestRecord = RECORD.get();
-			if (uipRequestRecord != null) {
-				uipRequestRecord.setSuccess(true);
-			}
-		} finally {
-			try {
-				uipRequestRecord = RECORD.get();
-				if (uipRequestRecord != null) {
-					Long start = START_TIME.get();
-					long end = System.currentTimeMillis();
-					if (result != null) {
-						if (result instanceof String) {
-							uipRequestRecord.setResponse((String) result);
-						} else {
-							uipRequestRecord.setResponse(JsonUtil.obj2json(result));
-						}
-					}
-					uipRequestRecord.setMilli(end - start);
-					uipRequestRecord.setResponseTime(DateTimeUtil.date2dateTimeStr(new Date(end)));
-					uipRecordService.add(uipRequestRecord);
-				}
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
-			START_TIME.remove();
-			RECORD.remove();
-		}
-		return result;
 	}
 
 }
